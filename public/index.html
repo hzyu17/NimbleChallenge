@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>aioquic Web App</title>
+</head>
+
+<body>
+  <script>
+    const transport = new WebTransport("https://localhost:4433/submit");
+  </script>
+  <h1>Hello from aioquic Web App</h1>
+  <button onclick="sendData()">Click Me</button>
+  <p id="response"></p>
+  <script src="client.js"></script>
+</body>
+</html>
