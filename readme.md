@@ -9,11 +9,15 @@ https://github.com/w3c/webtransport/tree/main
 
 1. Open a terminal, and run
 ```
+cd /path/to/NimbleChallenge/public
+
 python3 -m http.server 8000
 ```
 
 2. Open another terminal, and run chrome browser with the cert and the key used by the server, using
 ```
+cd /path/to/NimbleChallenge
+
 chromium-browser --origin-to-force-quic-on=localhost:4433 --ignore-certificate-errors-spki-list=FW8whX6LOaDhtXky4WSkBVu6k2XpZNKjs8dQMYXMIRo=
 ```
 

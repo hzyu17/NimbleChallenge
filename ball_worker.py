@@ -1,12 +1,10 @@
 import time
-import cv2
 import numpy as np
 
 from PIL import Image, ImageDraw
 
 
-
-def generate_frames(frame_queue, fps=100):
+def generate_frames(frame_queue, fps=150):
     width, height = 400, 300
     radius = 20
     x, y = 100, 100
