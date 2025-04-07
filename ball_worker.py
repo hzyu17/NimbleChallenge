@@ -4,7 +4,9 @@ import numpy as np
 
 from PIL import Image, ImageDraw
 
-def generate_frames(queue, fps=30):
+
+
+def generate_frames(frame_queue, fps=100):
     width, height = 400, 300
     radius = 20
     x, y = 100, 100
@@ -18,9 +20,24 @@ def generate_frames(queue, fps=30):
         draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill="blue")
 
         # Convert to NumPy array and send to queue
-        frame = np.array(img)
-        if not queue.full():
-            queue.put(frame)
+        frame = np.array(img).tolist()
+        
+        if len(frame_queue) >= 1:           
+            frame_queue[0] = {
+                "frame": frame,
+                "center": (x, y)
+            }
+                        
+        else:
+            frame_queue.append(
+                {
+                "frame": frame,
+                "center": (x, y)
+                }
+            )  # init
+                
+        # if not queue.full():
+        #     queue.put(frame)
 
         # Update position
         x += dx

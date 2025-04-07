@@ -88,13 +88,12 @@ from aioquic.quic.connection import stream_is_unidirectional
 from aioquic.quic.events import ProtocolNegotiated, StreamReset, QuicEvent
 
 import multiprocessing 
-from multiprocessing import Process, Queue
-
 from aiortc import RTCPeerConnection, VideoStreamTrack, RTCSessionDescription
 from aiortc import RTCPeerConnection, RTCSessionDescription
 import cv2
-import numpy as np
 from av import VideoFrame
+import json
+import numpy as np
 
 from ball_worker import generate_frames
 from asyncio import create_task
@@ -105,16 +104,23 @@ BIND_PORT = 4433
 logger = logging.getLogger(__name__)
 
 
+manager = multiprocessing.Manager()
+shared_frame_queue = manager.list()
+
+
 class BallStreamTrack(VideoStreamTrack):
     def __init__(self, frame_queue):
         super().__init__()
         self.queue = frame_queue
 
-    async def recv(self):
-        while self.queue.empty():
+    async def recv(self):        
+        while len(self.queue) == 0:
             await asyncio.sleep(0.01)
 
-        frame_np = self.queue.get()  
+        # frame_np = self.queue.get()  
+        frame_data = self.queue[0]
+        frame_np = np.array(frame_data['frame'], dtype=np.uint8)
+        
         video_frame = VideoFrame.from_ndarray(frame_np, format="rgb24")
         video_frame.pts, video_frame.time_base = await self.next_timestamp()
         return video_frame
@@ -159,13 +165,43 @@ class CounterHandler:
         self._http = http
         self._counters = defaultdict(int)
         self._payloads = defaultdict(bytearray)
+        
+        # shared_frame_queue = multiprocessing.Manager().list()
+        
 
     async def h3_event_received(self, event: H3Event) -> None:
-        
         if isinstance(event, DatagramReceived):
-            payload = event.data
-            self._http.send_datagram(self._session_id, payload)
+            try:
+                data = event.data.decode()
+                message = json.loads(data)
+                
+                # Compute the error with the current ball center
+                x_client, y_client = message["x"], message["y"]
 
+                # Grab latest frame from queue            
+                if len(shared_frame_queue) > 0:
+                    frame_data = shared_frame_queue[0]
+                    # frame_np = np.array(frame_data["frame"], dtype=np.uint8)
+                    center = frame_data["center"]
+
+                    x_server, y_server = center[0], center[1]
+                    error_x = x_client - x_server   
+                    error_y = y_client - y_server
+                    
+                    # Send the error to the client
+                    error_message = {
+                        "error_x": error_x,
+                        "error_y": error_y
+                    }
+                    self._http.send_datagram(self._session_id, json.dumps(error_message).encode())
+                    print("Error sent to client:", error_message)
+                                        
+                else:
+                    print("No frame available in queue")
+                
+            except Exception as e:
+                print("Failed to decode datagram:", e)
+            
         if isinstance(event, WebTransportStreamDataReceived):
             print("WebTransportStreamDataReceived! ")
             self._payloads[event.stream_id] += event.data
@@ -182,11 +218,12 @@ class CounterHandler:
                 # multiprocessing.Process(target=generate_frames, daemon=True).start()
                 # print("Bouncing ball process started")
                 
-                # ------------ Show the bouncing ball locally from the Queue ------------
-                self.frame_queue = multiprocessing.Queue(maxsize=10)
-                process = multiprocessing.Process(target=generate_frames, args=(self.frame_queue,), daemon=True)
+                # ------------ Generate bouncing ball frames in a separate process ------------
+                process = multiprocessing.Process(target=generate_frames, args=(shared_frame_queue,), daemon=True)
                 process.start() 
                 
+                
+                # ------------ Show the bouncing ball locally from the Queue ------------
                 # asyncio.create_task(self.consume_frames())
                 
                 # --------------------- Respond the bouncing ball answer ---------------------
@@ -195,7 +232,8 @@ class CounterHandler:
                 #     response_id, answer_sdp.encode(), end_stream=True
                 # )
                 
-                answer_sdp = await handle_offer(sdp_offer, self.frame_queue)
+                answer_sdp = await handle_offer(sdp_offer, shared_frame_queue)
+                
                 response_id = event.stream_id
                 self._http._quic.send_stream_data(response_id, answer_sdp.encode(), end_stream=True)
                 
@@ -215,8 +253,9 @@ class CounterHandler:
     async def consume_frames(self):
         print("Starting frame consumer")
         while True:
-            if not self.frame_queue.empty():
-                frame = self.frame_queue.get()  # NumPy array
+            if len(shared_frame_queue) > 0:
+                frame_data = shared_frame_queue[0]
+                frame = np.array(frame_data["frame"], dtype=np.uint8)
 
                 cv2.imshow("Server Preview", frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -267,7 +306,7 @@ class WebTransportProtocol(QuicConnectionProtocol):
 
         if self._handler:
             await self._handler.h3_event_received(event)
-
+            
 
     def _handshake_webtransport(self,
                                 stream_id: int,
@@ -323,7 +362,9 @@ if __name__ == '__main__':
         ))
     try:
         logging.info(
-            "Listening on https://{}:{}".format(BIND_ADDRESS, BIND_PORT))
+            "Listening on https://{}:{}".format(BIND_ADDRESS, BIND_PORT))    
         loop.run_forever()
+    
+    ## Handle close signal
     except KeyboardInterrupt:
         pass

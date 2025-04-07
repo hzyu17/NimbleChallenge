@@ -43,6 +43,7 @@ async function connect() {
   acceptUnidirectionalStreams(transport);
   document.forms.sending.elements.send.disabled = false;
   document.getElementById('connect').disabled = true;
+
 }
 
 // "Send data" button handler.
@@ -85,6 +86,38 @@ async function sendData() {
   }
 }
 
+
+function findBallCenter(pixels, width, height) {
+  let totalX = 0;
+  let totalY = 0;
+  let count = 0;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const r = pixels[i];
+      const g = pixels[i + 1];
+      const b = pixels[i + 2];
+      const a = pixels[i + 3];
+
+      // Simple threshold — detect white-ish pixels
+      if (r < 50 && g < 50 && b > 200 && a > 200) {
+        totalX += x;
+        totalY += y;
+        count++;
+      }
+    }
+  }
+
+  if (count > 0) {
+    const cx = Math.round(totalX / count);
+    const cy = Math.round(totalY / count);
+    return { x: cx, y: cy };
+  } else {
+    return null; 
+  }
+}
+
 // "Send SDP offer" button handler.
 async function sendSDP() {
   addToEventLog("Creating WebRTC peer connection...");
@@ -123,8 +156,45 @@ async function sendSDP() {
         video.srcObject = stream;
       }
       addToEventLog("Video track received and displayed.");
+
     };
 
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    function processFrame(now, metadata) {
+      // Draw current video frame onto canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Extract pixel data (RGBA)
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data; 
+      
+      // Find the ball center
+      const center = findBallCenter(pixels, canvas.width, canvas.height);
+
+      // Send the ball center coordinates as a datagram to the server
+      if (center && currentTransportDatagramWriter) {
+        // addToEventLog(`Ball center: (${center.x}, ${center.y})`);
+
+        const message = JSON.stringify({ x: center.x, y: center.y });
+        const encoded = new TextEncoder().encode(message);
+        currentTransportDatagramWriter.write(encoded);
+        
+      }
+
+
+      // Continue listening to the next frame
+      video.requestVideoFrameCallback(processFrame);
+    }
+
+    // Start the frame capture loop once video is ready
+    video.addEventListener("loadedmetadata", () => {
+      video.requestVideoFrameCallback(processFrame);
+    });
+
+    // Read the SDP answer from the server
     const reader = stream.readable.getReader();
     let answerSdp = "";
 
@@ -145,30 +215,56 @@ async function sendSDP() {
 }
 
 
-// Reads datagrams from |transport| into the event log until EOF is reached.
+// // Reads datagrams from |transport| into the event log until EOF is reached.
+// async function readDatagrams(transport) {
+//   try {
+//     var reader = transport.datagrams.readable.getReader();
+//     addToEventLog('Datagram reader ready.');
+//   } catch (e) {
+//     addToEventLog('Receiving datagrams not supported: ' + e, 'error');
+//     return;
+//   }
+//   const decoder = new TextDecoder('utf-8');
+//   try {
+//     while (true) {
+//       const { value, done } = await reader.read();
+//       if (done) {
+//         addToEventLog('Done reading datagrams!');
+//         return;
+//       }
+//       let data = decoder.decode(value);
+//       addToEventLog('Datagram received: ' + data);
+//     }
+//   } catch (e) {
+//     addToEventLog('Error while reading datagrams: ' + e, 'error');
+//   }
+// }
+
 async function readDatagrams(transport) {
   try {
-    var reader = transport.datagrams.readable.getReader();
-    addToEventLog('Datagram reader ready.');
-  } catch (e) {
-    addToEventLog('Receiving datagrams not supported: ' + e, 'error');
-    return;
-  }
-  const decoder = new TextDecoder('utf-8');
-  try {
+    const reader = transport.datagrams.readable.getReader();
+    const decoder = new TextDecoder("utf-8");  // Make sure this is here
+    addToEventLog("Datagram reader ready.");
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) {
-        addToEventLog('Done reading datagrams!');
+        addToEventLog("Datagram stream closed.");
         return;
       }
-      let data = decoder.decode(value);
-      addToEventLog('Datagram received: ' + data);
+
+      const jsonString = decoder.decode(value);  // Now decoder is in scope
+      const message = JSON.parse(jsonString);
+
+      addToEventLog(
+        `Ball center difference: ${JSON.stringify(message)}`
+      );
     }
   } catch (e) {
-    addToEventLog('Error while reading datagrams: ' + e, 'error');
+    addToEventLog("Error while reading datagrams: " + e, "error");
   }
 }
+
 
 async function acceptUnidirectionalStreams(transport) {
   let reader = transport.incomingUnidirectionalStreams.getReader();
